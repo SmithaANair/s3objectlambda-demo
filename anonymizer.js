@@ -1,88 +1,53 @@
 const AWS = require('aws-sdk');
 const S3 = new AWS.S3();
-const comprehend = new AWS.Comprehend();
-
-
-const Axios = require('axios');
+const HTMLParser = require('node-html-parser');
 
 exports.handler = async (event) => {
-    console.log('start the s3 object lambda')
+    console.log('start the s3 object lambda');
+    console.log('start the s3 object lambda');
+    const Key = event.Records[0].s3.object.key;
+    const Bucket = event.Records[0].s3.bucket.name;
+    console.log('Key----------' + Key);
+    console.log('Bucket----------' + Bucket);
 
-    const objectGetContext = event.getObjectContext;
-    const requestRoute = objectGetContext.outputRoute;
-    const requestToken = objectGetContext.outputToken;
-    const s3URL = objectGetContext.inputS3Url;
+    const resp = await S3.getObject({
+        Bucket: Bucket,
+        Key
+    }).promise();
+    const respData = resp.Body;
+    let dataInString = respData.toString('utf8');
+    console.log(dataInString);
 
-    // Get object from S3
-    const response = await Axios({
-        url : s3URL,
-        method: 'GET',
-        responseType: 'arraybuffer'
-    });
+    const root = HTMLParser.parse(dataInString);
+    const titlebarContainerElement = root.querySelector('.title-bar-container');
+    if (null != titlebarContainerElement) {
+        const navContainerElement = root.querySelector('#navContainer');
+        if (null != navContainerElement) {
+            console.log('Element already added to the html page');   
+        } else {
+            let d_nested = root.querySelector(".tab-bar");
+            if (null != d_nested)
+                d_nested.remove();
+            titlebarContainerElement.innerHTML += `<div id="navContainer"></div>`;
+            const modifiedData = root.toString('utf8');
 
-    const data = response.data;
-    
-    // Transform object
-    const pii = await detectPiiEntities(data);
-
-    const cleanText = replacePiiWithBlank(data, pii);
-    console.log(cleanText);
-
-    // Write object back to s3 object lambda
-    const params = {
-        Body : cleanText,
-        RequestRoute : requestRoute,
-        RequestToken : requestToken
-    };
-
-    console.log(params);
-
-    const result = await saveItemS3(params);
-    console.log(result);
-
-    return ('status_code', 200);    
-
-}
-
-saveItemS3 = async params => {
-    return S3.writeGetObjectResponse(params).promise().then((data) => {
-        return data;
-    }).catch(error => {
-        return error;
-    });
-}
-
-detectPiiEntities = async text => {
-    const params = {
-        LanguageCode: 'en',
-        Text: text.toString('utf8')
+            const params = {
+                Body: modifiedData,
+                ContentType: "text/html",
+                Bucket: Bucket,
+                Key: Key,
+            };
+            return await new Promise((resolve, reject) => {
+                S3.putObject(params, (err, results) => {
+                    if (err) reject(err);
+                    else resolve(results);
+                });
+            });
+        }
+    } else {
+        console.log('No Parent container found');
     }
-
-    return comprehend.detectPiiEntities(params).promise().then((data) => {
-        return data;
-    }).catch(error => {
-        return error;
-    })
-}
-
-replacePiiWithBlank = (data, offsetArray) => {
-    const filler = '*****';
-
-    const originalText = data.toString('utf8');
-    let cleanText = data.toString('utf8');
-    
-    offsetArray.Entities.forEach(element => {
-        cleanText = replacePiiInline(cleanText, originalText, element.BeginOffset, element.EndOffset);
-    });
-
-    return cleanText;
+    return ('status_code', 200);
 }
 
 
-replacePiiInline = (modifiedText, originalText, beginOffset, endOffset) => {
-    const filler = '*****';
-
-    const pii = originalText.substring(beginOffset, endOffset);
-    const newString = modifiedText.replace(pii, filler);
-    return newString;
-}
